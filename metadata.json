@@ -1,0 +1,6 @@
+{
+  "name": "Brain Science School Zafarwal",
+  "description": "Official web portal and advanced school management system for Brain Science School Zafarwal, Punjab, Pakistan. Led by Principal Shahid Javed.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
