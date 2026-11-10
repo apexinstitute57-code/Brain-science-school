@@ -1,17 +1,93 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AdmissionInquiry, CampusType, Student } from '../../types';
 import { StorageService } from '../../services/storage';
-import { Search, Download, UserCheck, Calendar, Check, X, Phone, UserPlus } from 'lucide-react';
+import { getStoredSupabaseConfig } from '../../services/supabase';
+import {
+  Search,
+  Download,
+  UserCheck,
+  Calendar,
+  Check,
+  X,
+  Phone,
+  UserPlus,
+  RefreshCw,
+  Database,
+  CheckCircle2,
+} from 'lucide-react';
 
 interface AdmissionManagerProps {
   campusFilter: 'all' | CampusType;
 }
 
 export const AdmissionManager: React.FC<AdmissionManagerProps> = ({ campusFilter }) => {
-  const [admissions, setAdmissions] = useState<AdmissionInquiry[]>(StorageService.getAdmissions());
+  const isSupabaseConfigured = Boolean(getStoredSupabaseConfig().url);
+  const [admissions, setAdmissions] = useState<AdmissionInquiry[]>(() => {
+    // If Supabase is configured, start empty to avoid flashing mock data before cloud records arrive
+    return isSupabaseConfigured ? [] : StorageService.getAdmissions();
+  });
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedInquiry, setSelectedInquiry] = useState<AdmissionInquiry | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncInfo, setSyncInfo] = useState<{
+    synced: boolean;
+    message: string;
+    lastSyncTime?: string;
+  }>({
+    synced: false,
+    message: isSupabaseConfigured ? 'Connecting to Supabase admissions...' : 'Supabase not configured (Local records active)',
+  });
+
+  const loadFromSupabase = async (silent = false) => {
+    if (!silent) setIsSyncing(true);
+    try {
+      const result = await StorageService.fetchAdmissionsFromSupabase();
+      if (result.fromSupabase) {
+        setAdmissions(result.admissions);
+        setSyncInfo({
+          synced: true,
+          message: `Supabase: Connected (${result.admissions.length} record${result.admissions.length === 1 ? '' : 's'})`,
+          lastSyncTime: new Date().toLocaleTimeString(),
+        });
+      } else {
+        const config = getStoredSupabaseConfig();
+        if (!config.url) {
+          setAdmissions(StorageService.getAdmissions());
+          setSyncInfo({
+            synced: false,
+            message: 'Supabase credentials not configured.',
+            lastSyncTime: new Date().toLocaleTimeString(),
+          });
+        } else {
+          setSyncInfo({
+            synced: false,
+            message: `Supabase notice: ${result.error || 'Check table / RLS policy'}`,
+            lastSyncTime: new Date().toLocaleTimeString(),
+          });
+        }
+      }
+    } catch (err: any) {
+      setSyncInfo({
+        synced: false,
+        message: `Sync notice: ${err?.message || 'Error reaching Supabase'}`,
+        lastSyncTime: new Date().toLocaleTimeString(),
+      });
+    } finally {
+      if (!silent) setIsSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    loadFromSupabase(false);
+
+    // Auto-polling: automatically refresh newly submitted admissions every 12 seconds
+    const interval = setInterval(() => {
+      loadFromSupabase(true);
+    }, 12000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const filtered = admissions.filter((inq) => {
     const campusMatch = campusFilter === 'all' || inq.campus_id === campusFilter;
@@ -24,8 +100,8 @@ export const AdmissionManager: React.FC<AdmissionManagerProps> = ({ campusFilter
     return campusMatch && statusMatch && searchMatch;
   });
 
-  const handleUpdateStatus = (inq: AdmissionInquiry, newStatus: AdmissionInquiry['status']) => {
-    const updated = StorageService.updateAdmission({
+  const handleUpdateStatus = async (inq: AdmissionInquiry, newStatus: AdmissionInquiry['status']) => {
+    const updated = await StorageService.updateAdmission({
       ...inq,
       status: newStatus,
     });
@@ -85,19 +161,43 @@ export const AdmissionManager: React.FC<AdmissionManagerProps> = ({ campusFilter
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-white">Student Admissions & Inquiries Queue</h2>
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-xl font-bold text-white">Student Admissions & Inquiries Queue</h2>
+            <span
+              className={`text-[10px] font-mono px-2 py-0.5 rounded-full border flex items-center gap-1 ${
+                syncInfo.synced
+                  ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                  : 'bg-slate-800 text-slate-300 border-slate-700'
+              }`}
+            >
+              <Database className="w-3 h-3 text-amber-400" />
+              <span>{syncInfo.message}</span>
+            </span>
+          </div>
           <p className="text-xs text-slate-400">
-            Review online application submissions from website, schedule interviews, and enroll candidates
+            Review online application submissions from website, schedule interviews, and enroll candidates.
           </p>
         </div>
 
-        <button
-          onClick={handleExportCSV}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-200 bg-slate-900 border border-slate-700 hover:border-slate-500 rounded-lg cursor-pointer transition-colors self-start sm:self-auto"
-        >
-          <Download className="w-3.5 h-3.5 text-amber-400" />
-          <span>Export Inquiries CSV</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            onClick={() => loadFromSupabase(false)}
+            disabled={isSyncing}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-200 bg-slate-900 border border-slate-700 hover:border-slate-500 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
+            title="Fetch latest admissions from Supabase admissions table"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Syncing...' : 'Sync with Supabase'}</span>
+          </button>
+
+          <button
+            onClick={handleExportCSV}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-200 bg-slate-900 border border-slate-700 hover:border-slate-500 rounded-lg cursor-pointer transition-colors"
+          >
+            <Download className="w-3.5 h-3.5 text-amber-400" />
+            <span>Export CSV</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter and Search Bar */}
@@ -147,8 +247,18 @@ export const AdmissionManager: React.FC<AdmissionManagerProps> = ({ campusFilter
             <tbody className="divide-y divide-slate-800/80">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-500">
-                    No admission inquiries found matching criteria.
+                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                    <Database className="w-7 h-7 mx-auto text-slate-600 mb-2" />
+                    <div className="font-semibold text-sm text-slate-300">
+                      {syncInfo.synced
+                        ? 'No admission applications in Supabase admissions table yet.'
+                        : 'No admission records found matching criteria.'}
+                    </div>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                      {syncInfo.synced
+                        ? 'When a student submits the online admission form on the website, their application will appear here automatically.'
+                        : 'Configure your Supabase Project in Settings or submit an admission via the public website.'}
+                    </p>
                   </td>
                 </tr>
               ) : (
