@@ -6,6 +6,7 @@ import {
   testSupabaseConnection,
   normalizeSupabaseUrl,
   normalizeSupabaseKey,
+  inspectSupabaseKey,
   ConnectionTestResult,
   SUPABASE_ADMISSIONS_TABLE_SQL,
   SUPABASE_AI_PROMPT,
@@ -27,6 +28,8 @@ import {
   WifiOff,
   Clock,
   Sparkles,
+  HelpCircle,
+  Info,
 } from 'lucide-react';
 
 export const SupabaseSettings: React.FC = () => {
@@ -34,6 +37,7 @@ export const SupabaseSettings: React.FC = () => {
   const [url, setUrl] = useState(currentConfig.url);
   const [anonKey, setAnonKey] = useState(currentConfig.anonKey);
   const [showKey, setShowKey] = useState(false);
+  const [showHelp401, setShowHelp401] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
@@ -48,23 +52,32 @@ export const SupabaseSettings: React.FC = () => {
     setIsSaved(Boolean(config.url && config.anonKey));
   }, []);
 
+  // Real-time inspection
+  const normUrl = normalizeSupabaseUrl(url);
+  const inspectedKey = inspectSupabaseKey(anonKey);
+  const hasRefMismatch = Boolean(
+    normUrl.projectRef &&
+    inspectedKey.projectRef &&
+    normUrl.projectRef.toLowerCase() !== inspectedKey.projectRef.toLowerCase()
+  );
+
   const handleSaveAndTest = async (e: React.FormEvent) => {
     e.preventDefault();
     setTesting(true);
     setTestResult(null);
 
     // Normalize URL and Key
-    const normUrl = normalizeSupabaseUrl(url);
-    const normKey = normalizeSupabaseKey(anonKey);
+    const normalizedUrl = normalizeSupabaseUrl(url);
+    const normalizedKey = normalizeSupabaseKey(anonKey);
 
-    if (normUrl.url && normUrl.url !== url) {
-      setUrl(normUrl.url);
+    if (normalizedUrl.url && normalizedUrl.url !== url) {
+      setUrl(normalizedUrl.url);
     }
-    if (normKey.key && normKey.key !== anonKey) {
-      setAnonKey(normKey.key);
+    if (normalizedKey.key && normalizedKey.key !== anonKey) {
+      setAnonKey(normalizedKey.key);
     }
 
-    if (normKey.isServiceRole) {
+    if (normalizedKey.isServiceRole) {
       setTestResult({
         success: false,
         errorType: 'invalid_key',
@@ -74,7 +87,7 @@ export const SupabaseSettings: React.FC = () => {
       return;
     }
 
-    const saveResult = saveStoredSupabaseConfig(normUrl.url || url, normKey.key || anonKey);
+    const saveResult = saveStoredSupabaseConfig(normalizedUrl.url || url, normalizedKey.key || anonKey);
     if (!saveResult.success) {
       setTestResult({
         success: false,
@@ -85,7 +98,7 @@ export const SupabaseSettings: React.FC = () => {
     }
 
     setIsSaved(true);
-    const result = await testSupabaseConnection(normUrl.url || url, normKey.key || anonKey);
+    const result = await testSupabaseConnection(normalizedUrl.url || url, normalizedKey.key || anonKey);
     setTestResult(result);
     setTesting(false);
   };
@@ -159,9 +172,16 @@ export const SupabaseSettings: React.FC = () => {
 
         <form onSubmit={handleSaveAndTest} className="space-y-4 max-w-xl">
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
-              Supabase Project URL <span className="text-amber-400">*</span>
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-semibold text-slate-300">
+                Supabase Project URL <span className="text-amber-400">*</span>
+              </label>
+              {normUrl.projectRef && (
+                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/80">
+                  Ref: {normUrl.projectRef}
+                </span>
+              )}
+            </div>
             <input
               type="text"
               value={url}
@@ -175,9 +195,16 @@ export const SupabaseSettings: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
-              Supabase Anon / Publishable Public Key <span className="text-amber-400">*</span>
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-semibold text-slate-300">
+                Supabase Anon / Publishable Public Key <span className="text-amber-400">*</span>
+              </label>
+              {inspectedKey.projectRef && (
+                <span className="text-[10px] font-mono text-blue-300 bg-blue-950/60 px-1.5 py-0.5 rounded border border-blue-800/80">
+                  Key Ref: {inspectedKey.projectRef} ({inspectedKey.role || 'anon'})
+                </span>
+              )}
+            </div>
             <div className="relative">
               <input
                 type={showKey ? 'text' : 'password'}
@@ -195,10 +222,52 @@ export const SupabaseSettings: React.FC = () => {
                 {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-            <span className="text-[11px] text-slate-500 mt-1 block">
-              Only use the public anon/publishable key. Never use the secret service_role key.
-            </span>
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-[11px] text-slate-500">
+                Only use the public anon/publishable key. Never use the secret service_role key.
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowHelp401(!showHelp401)}
+                className="text-[11px] text-amber-400 hover:text-amber-300 flex items-center gap-1 cursor-pointer shrink-0 ml-2"
+              >
+                <HelpCircle className="w-3.5 h-3.5" />
+                <span>Got HTTP 401?</span>
+              </button>
+            </div>
           </div>
+
+          {/* Real-time Project Mismatch Warning */}
+          {hasRefMismatch && (
+            <div className="p-3.5 rounded-xl bg-amber-950/80 border border-amber-700 text-amber-200 text-xs space-y-1.5">
+              <div className="font-bold flex items-center gap-1.5 text-amber-300">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>Project Reference Mismatch Detected!</span>
+              </div>
+              <p className="text-[11px] leading-relaxed">
+                Your Project URL points to <code className="text-white bg-slate-900 px-1 py-0.5 rounded">{normUrl.projectRef}</code>, but this API key is from <code className="text-white bg-slate-900 px-1 py-0.5 rounded">{inspectedKey.projectRef}</code>.
+                Supabase will reject this key with <strong>HTTP 401</strong>. Please copy the anon key from project <code className="text-amber-300">{normUrl.projectRef}</code>.
+              </p>
+            </div>
+          )}
+
+          {/* Expandable 401 Troubleshooting Guide */}
+          {showHelp401 && (
+            <div className="p-4 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-300 space-y-2">
+              <div className="font-semibold text-white flex items-center gap-1.5">
+                <Info className="w-4 h-4 text-amber-400" />
+                <span>How to Fix "Invalid API Key (HTTP 401)":</span>
+              </div>
+              <ol className="list-decimal pl-4 space-y-1 text-[11px] text-slate-300">
+                <li>Log in to <a href="https://supabase.com/dashboard" target="_blank" rel="noopener noreferrer" className="text-amber-400 underline">supabase.com/dashboard</a>.</li>
+                <li>Make sure you select the exact project matching your URL: <strong className="text-white">{normUrl.projectRef || 'your project'}</strong>.</li>
+                <li>In the left sidebar, click <strong>Project Settings (gear icon)</strong> → <strong>API</strong>.</li>
+                <li>Under <strong>Project API keys</strong>, locate the key labeled <span className="text-emerald-400 font-mono">anon</span> / <span className="text-emerald-400 font-mono">public</span>.</li>
+                <li>Click <strong>Copy</strong> next to <span className="font-mono text-emerald-300">anon</span> (starts with <code className="bg-slate-900 px-1 text-slate-200">eyJhbGci...</code>).</li>
+                <li>Ensure you do <strong>not</strong> copy the <span className="text-red-400 font-mono">service_role</span> key.</li>
+              </ol>
+            </div>
+          )}
 
           {/* Diagnostic Result Box */}
           {testResult && (

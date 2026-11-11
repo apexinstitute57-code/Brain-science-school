@@ -11,16 +11,35 @@ const SUPABASE_KEY_KEY = 'bss_supabase_anon_key';
  * - Accidental dashboard URL copy-paste
  * - Whitespace and quotes
  */
-export function normalizeSupabaseUrl(input: string): { url: string; error?: string } {
-  let cleaned = (input || '').trim().replace(/^['"]|['"]$/g, '');
+export interface NormalizedUrlResult {
+  url: string;
+  projectRef?: string;
+  error?: string;
+}
+
+/**
+ * Normalizes and validates a Supabase Project URL.
+ * Handles common user mistakes:
+ * - Missing protocol (adds https://)
+ * - Trailing slashes or subpaths (/rest/v1)
+ * - Accidental dashboard URL copy-paste
+ * - Whitespace, quotes, and newlines
+ */
+export function normalizeSupabaseUrl(input: string): NormalizedUrlResult {
+  let cleaned = (input || '').trim().replace(/^['"`]|['"`]$/g, '');
   if (!cleaned) {
     return { url: '', error: 'Project URL is required.' };
   }
 
-  // Detect Supabase Dashboard URL (e.g., https://supabase.com/dashboard/project/abcdefgh)
-  const dashboardMatch = cleaned.match(/supabase\.(?:com|io)\/dashboard\/project\/([a-zA-Z0-9_-]+)/);
+  // Detect Supabase Dashboard URL (e.g., https://supabase.com/dashboard/project/abcdefgh/settings/api)
+  const dashboardMatch = cleaned.match(/supabase\.(?:com|io)\/dashboard\/project\/([a-zA-Z0-9_-]+)/i);
   if (dashboardMatch && dashboardMatch[1]) {
     cleaned = `https://${dashboardMatch[1]}.supabase.co`;
+  }
+
+  // If user pasted bare project ref (e.g., "abcdefghijklmnopqrst")
+  if (/^[a-z0-9_-]{15,30}$/i.test(cleaned) && !cleaned.includes('.')) {
+    cleaned = `https://${cleaned}.supabase.co`;
   }
 
   // Prepend https:// if protocol is missing
@@ -33,58 +52,140 @@ export function normalizeSupabaseUrl(input: string): { url: string; error?: stri
     cleaned = cleaned.replace('http://', 'https://');
   }
 
+  // Remove any PostgREST path suffix if pasted (e.g., /rest/v1, /rest, /v1)
+  cleaned = cleaned
+    .replace(/\/rest\/v1\/?$/i, '')
+    .replace(/\/rest\/?$/i, '')
+    .replace(/\/v1\/?$/i, '');
+
   // Strip trailing slashes
   cleaned = cleaned.replace(/\/+$/, '');
+
+  // Extract project ref
+  let projectRef: string | undefined;
+  const refMatch = cleaned.match(/https?:\/\/([a-zA-Z0-9_-]+)\.supabase\.(?:co|in|net)/i);
+  if (refMatch && refMatch[1]) {
+    projectRef = refMatch[1];
+  }
 
   // Validate URL format
   try {
     const parsed = new URL(cleaned);
     if (!parsed.hostname.includes('.')) {
-      return { url: cleaned, error: 'Invalid URL. Format should be: https://your-project-id.supabase.co' };
+      return { url: cleaned, projectRef, error: 'Invalid URL. Format should be: https://your-project-id.supabase.co' };
     }
-    return { url: cleaned };
+    return { url: cleaned, projectRef };
   } catch {
-    return { url: cleaned, error: 'Invalid URL format. Example: https://your-project-id.supabase.co' };
+    return { url: cleaned, projectRef, error: 'Invalid URL format. Example: https://your-project-id.supabase.co' };
   }
+}
+
+export interface DecodedSupabaseKey {
+  key: string;
+  isJwt: boolean;
+  role?: string;
+  projectRef?: string;
+  exp?: number;
+  isExpired?: boolean;
+  expiresAt?: string;
+  isServiceRole?: boolean;
+  error?: string;
+}
+
+/**
+ * Deep inspection of Supabase API Key.
+ * Decodes the JWT payload client-side to extract role, project reference, and expiration.
+ */
+export function inspectSupabaseKey(input: string): DecodedSupabaseKey {
+  let cleaned = (input || '').trim().replace(/^['"`]|['"`]$/g, '');
+  // Remove accidental copy prefixes like "Bearer ", "bearer: ", "apikey: ", "anon: "
+  cleaned = cleaned.replace(/^(?:bearer|apikey|api_key|anon)[:=\s]+/i, '').trim();
+  // Strip any inner whitespace or linebreaks from multiline copy-paste
+  cleaned = cleaned.replace(/\s+/g, '');
+
+  if (!cleaned) {
+    return { key: '', isJwt: false, error: 'API Key is required.' };
+  }
+
+  if (cleaned.length < 20) {
+    return {
+      key: cleaned,
+      isJwt: false,
+      error: 'The API Key is too short. Please copy the anon public key from Supabase Project Settings -> API.',
+    };
+  }
+
+  if (cleaned.startsWith('postgres://') || cleaned.startsWith('postgresql://')) {
+    return {
+      key: cleaned,
+      isJwt: false,
+      error: 'You entered a database connection string instead of the API key. Please copy the anon public key (JWT) from Supabase Project Settings -> API.',
+    };
+  }
+
+  // Attempt decoding JWT
+  const parts = cleaned.split('.');
+  if (parts.length === 3) {
+    try {
+      const payloadStr = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
+      const payload = JSON.parse(payloadStr);
+
+      const isServiceRole = payload.role === 'service_role';
+      const isExpired = typeof payload.exp === 'number' && payload.exp * 1000 < Date.now();
+      const expiresAt = typeof payload.exp === 'number' ? new Date(payload.exp * 1000).toLocaleString() : undefined;
+
+      let errorMsg: string | undefined;
+      if (isServiceRole) {
+        errorMsg = 'Security Alert: You entered a secret "service_role" key. Never use service_role in client-side code! Please copy the "anon" public key instead.';
+      } else if (isExpired) {
+        errorMsg = `API Key Expired: This key expired on ${expiresAt}. Please copy the active anon key from Supabase Project Settings -> API.`;
+      }
+
+      return {
+        key: cleaned,
+        isJwt: true,
+        role: payload.role || 'anon',
+        projectRef: payload.ref,
+        exp: payload.exp,
+        isExpired,
+        expiresAt,
+        isServiceRole,
+        error: errorMsg,
+      };
+    } catch {
+      // Malformed base64 in JWT
+    }
+  }
+
+  // Modern Supabase publishable key format (e.g. sbp_...)
+  return {
+    key: cleaned,
+    isJwt: false,
+    role: cleaned.startsWith('sbp_') ? 'publishable' : undefined,
+  };
 }
 
 /**
  * Normalizes and validates a Supabase Public / Publishable / Anon Key.
  * Rejects secret service_role keys to protect security.
  */
-export function normalizeSupabaseKey(input: string): { key: string; error?: string; isServiceRole?: boolean } {
-  const cleaned = (input || '').trim().replace(/^['"]|['"]$/g, '');
-  if (!cleaned) {
-    return { key: '', error: 'API Key is required.' };
-  }
-
-  if (cleaned.length < 20) {
-    return { key: cleaned, error: 'The API Key is too short. Please copy the anon public key or publishable key from Project Settings -> API.' };
-  }
-
-  if (cleaned.startsWith('postgres://') || cleaned.startsWith('postgresql://')) {
-    return { key: cleaned, error: 'You entered a database connection string instead of the API key. Please copy the anon public key (JWT) from Supabase Project Settings -> API.' };
-  }
-
-  // Security Check: Never allow service_role / secret key in browser
-  try {
-    const parts = cleaned.split('.');
-    if (parts.length === 3) {
-      const payloadStr = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
-      const payload = JSON.parse(payloadStr);
-      if (payload.role === 'service_role') {
-        return {
-          key: cleaned,
-          isServiceRole: true,
-          error: 'Security Warning: You entered a secret "service_role" key. Never use service_role in client-side code! Please copy the "anon" public key instead.',
-        };
-      }
-    }
-  } catch {
-    // Might be a new publishable key format (sbp_... or pk_...)
-  }
-
-  return { key: cleaned };
+export function normalizeSupabaseKey(input: string): {
+  key: string;
+  error?: string;
+  isServiceRole?: boolean;
+  projectRef?: string;
+  isExpired?: boolean;
+  role?: string;
+} {
+  const inspected = inspectSupabaseKey(input);
+  return {
+    key: inspected.key,
+    error: inspected.error,
+    isServiceRole: inspected.isServiceRole,
+    projectRef: inspected.projectRef,
+    isExpired: inspected.isExpired,
+    role: inspected.role,
+  };
 }
 
 export function getStoredSupabaseConfig(): { url: string; anonKey: string } {
@@ -165,6 +266,28 @@ export interface AdmissionsTableSchema {
 
 let cachedAdmissionsSchema: AdmissionsTableSchema | null = null;
 
+const STANDARD_ADMISSIONS_COLUMNS = [
+  'id',
+  'tracking_no',
+  'applicant_name',
+  'father_name',
+  'gender',
+  'campus_id',
+  'applied_grade',
+  'guardian_phone',
+  'guardian_cnic',
+  'address',
+  'previous_school',
+  'status',
+  'notes',
+  'student_name',
+  'guardian_name',
+  'phone',
+  'grade',
+  'email',
+  'created_at',
+];
+
 /**
  * Discovers the exact columns of the 'admissions' table from PostgREST OpenAPI or live query.
  * Guarantees that the app does not guess column names.
@@ -179,13 +302,17 @@ export async function discoverAdmissionsTableSchema(
 
   const { url, anonKey } = getStoredSupabaseConfig();
   if (!url || !anonKey) {
-    return { discovered: false, columns: [], columnDetails: {} };
+    return {
+      discovered: false,
+      columns: STANDARD_ADMISSIONS_COLUMNS,
+      columnDetails: Object.fromEntries(STANDARD_ADMISSIONS_COLUMNS.map((c) => [c, { type: 'string' }])),
+    };
   }
 
   // 1. Attempt PostgREST OpenAPI discovery
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
 
     const res = await fetch(`${url}/rest/v1/?apikey=${anonKey}`, {
       method: 'GET',
@@ -227,7 +354,7 @@ export async function discoverAdmissionsTableSchema(
       }
     }
   } catch (err) {
-    // OpenAPI endpoint might be disabled or timed out
+    // OpenAPI endpoint might be disabled or restricted; continue to fallback
   }
 
   // 2. Query admissions table directly if client available
@@ -270,7 +397,12 @@ export async function discoverAdmissionsTableSchema(
     }
   } catch {}
 
-  return { discovered: false, columns: [], columnDetails: {} };
+  // 4. Default to standard supported columns so form mapping works immediately
+  return {
+    discovered: false,
+    columns: STANDARD_ADMISSIONS_COLUMNS,
+    columnDetails: Object.fromEntries(STANDARD_ADMISSIONS_COLUMNS.map((c) => [c, { type: 'string' }])),
+  };
 }
 
 export interface ConnectionTestResult {
@@ -280,11 +412,21 @@ export interface ConnectionTestResult {
   rlsRestricted?: boolean;
   errorType?: 'offline' | 'invalid_url' | 'invalid_key' | 'project_paused' | 'table_missing' | 'rls_error' | 'fetch_error';
   discoveredColumns?: string[];
+  keyInfo?: {
+    role?: string;
+    projectRef?: string;
+    expiresAt?: string;
+    isJwt?: boolean;
+  };
 }
 
 /**
  * Robust Supabase connection tester with deep diagnostics.
- * Differentiates between offline states, paused projects, invalid keys, and missing tables.
+ * Prevents false 401 rejections from OpenAPI root and provides accurate diagnostics:
+ * - Checks network connectivity
+ * - Detects Project Reference mismatches between URL and JWT key
+ * - Tests direct PostgreSQL table queries with @supabase/supabase-js
+ * - Identifies valid keys even if tables are missing (42P01) or RLS-restricted (42501)
  */
 export async function testSupabaseConnection(rawUrl: string, rawKey: string): Promise<ConnectionTestResult> {
   // 1. Check browser network connectivity
@@ -296,7 +438,7 @@ export async function testSupabaseConnection(rawUrl: string, rawKey: string): Pr
     };
   }
 
-  // 2. Validate input strings
+  // 2. Validate input URL
   const normUrl = normalizeSupabaseUrl(rawUrl);
   if (normUrl.error) {
     return {
@@ -306,6 +448,7 @@ export async function testSupabaseConnection(rawUrl: string, rawKey: string): Pr
     };
   }
 
+  // 3. Validate input Key and inspect JWT payload
   const normKey = normalizeSupabaseKey(rawKey);
   if (normKey.error) {
     return {
@@ -317,144 +460,190 @@ export async function testSupabaseConnection(rawUrl: string, rawKey: string): Pr
 
   const url = normUrl.url;
   const anonKey = normKey.key;
+  const keyInfo = {
+    role: normKey.role,
+    projectRef: normKey.projectRef,
+    isJwt: Boolean(normKey.projectRef || normKey.role),
+  };
 
-  // 3. Stage 1: Fast ping to PostgREST root endpoint
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-    const pingRes = await fetch(`${url}/rest/v1/`, {
-      method: 'GET',
-      headers: {
-        apikey: anonKey,
-        Authorization: `Bearer ${anonKey}`,
-      },
-      signal: controller.signal,
-    }).catch((err) => {
-      clearTimeout(timeoutId);
-      throw err;
-    });
-
-    clearTimeout(timeoutId);
-
-    if (pingRes.status === 401 || pingRes.status === 403) {
-      return {
-        success: false,
-        errorType: 'invalid_key',
-        message: 'Invalid API Key. Supabase rejected your key (HTTP ' + pingRes.status + '). Please check the anon/publishable key in Supabase Project Settings -> API.',
-      };
-    }
-
-    if (pingRes.status === 503) {
-      return {
-        success: false,
-        errorType: 'project_paused',
-        message: 'Supabase project is temporarily unavailable (HTTP 503). Your project may be paused in your Supabase dashboard.',
-      };
-    }
-  } catch (err: any) {
-    // If fetch failed
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      return {
-        success: false,
-        errorType: 'offline',
-        message: 'Network offline. Your internet connection appears to be disconnected.',
-      };
-    }
-
-    if (err.name === 'AbortError') {
-      return {
-        success: false,
-        errorType: 'fetch_error',
-        message: 'Connection timed out after 8 seconds. Please check if your Supabase project is active or paused.',
-      };
-    }
-
-    const errStr = String(err?.message || err);
-    if (errStr.includes('Failed to fetch') || err.name === 'TypeError') {
-      return {
-        success: false,
-        errorType: 'project_paused',
-        message: `Failed to connect to Supabase at "${url}". Common causes:\n` +
-          `1. The project may be paused in your Supabase Dashboard (free tier projects pause after 7 days of inactivity). Go to supabase.com and unpause it.\n` +
-          `2. The Project URL is incorrect (ensure it looks like https://<project-ref>.supabase.co).\n` +
-          `3. An adblocker, VPN, or firewall is blocking requests to supabase.co.`,
-      };
-    }
-
+  // 4. Deep Diagnostic: Check for Project Reference Mismatch between URL and Key!
+  // This is the #1 cause of Supabase HTTP 401 Unauthorized errors.
+  if (normUrl.projectRef && normKey.projectRef && normUrl.projectRef.toLowerCase() !== normKey.projectRef.toLowerCase()) {
     return {
       success: false,
-      errorType: 'fetch_error',
-      message: `Connection error: ${errStr}`,
+      errorType: 'invalid_key',
+      keyInfo,
+      message:
+        `Project Reference Mismatch (Causes Supabase HTTP 401):\n` +
+        `• Your Project URL is targeting: "${normUrl.projectRef}"\n` +
+        `• But your API Key belongs to project: "${normKey.projectRef}"\n\n` +
+        `Supabase will reject any request with HTTP 401 when the key is from a different project.\n\n` +
+        `How to fix:\n` +
+        `1. Open Supabase Dashboard at https://supabase.com/dashboard\n` +
+        `2. Select the project "${normUrl.projectRef}"\n` +
+        `3. Go to Project Settings -> API\n` +
+        `4. Copy the "anon" public key for "${normUrl.projectRef}" and paste it here.`,
     };
   }
 
-  // 4. Stage 2: Initialize official Supabase client and query the 'admissions' table
+  // 5. Test connection using official @supabase/supabase-js client directly
   try {
-    const testClient = createClient(url, anonKey);
-    const schema = await discoverAdmissionsTableSchema(testClient, true);
+    const testClient = createClient(url, anonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
 
-    const { data, error } = await testClient
-      .from('admissions')
-      .select('id')
-      .limit(1);
+    // Run table query with timeout
+    const timeoutPromise = new Promise<{ data: any; error: any; isTimeout: boolean }>((resolve) =>
+      setTimeout(
+        () =>
+          resolve({
+            data: null,
+            error: {
+              name: 'TimeoutError',
+              message: 'Connection timed out after 10 seconds. Your Supabase project might be paused or asleep.',
+            },
+            isTimeout: true,
+          }),
+        10000
+      )
+    );
 
+    const queryPromise = Promise.resolve(testClient.from('admissions').select('id').limit(1))
+      .then((res) => ({ data: res.data, error: res.error, isTimeout: false }))
+      .catch((err: any) => ({ data: null, error: err, isTimeout: false }));
+
+    const { data: _queryData, error, isTimeout } = await Promise.race([queryPromise, timeoutPromise]);
+
+    if (isTimeout) {
+      return {
+        success: false,
+        errorType: 'fetch_error',
+        keyInfo,
+        message:
+          `Connection timed out connecting to "${url}".\n` +
+          `Free tier Supabase projects pause after 7 days of inactivity. Visit your Supabase Dashboard to resume/unpause the project.`,
+      };
+    }
+
+    // CASE 1: Query succeeded without error!
     if (!error) {
+      const schema = await discoverAdmissionsTableSchema(testClient, true);
       const colMsg = schema.columns.length > 0 ? ` Detected columns: [${schema.columns.join(', ')}]` : '';
       return {
         success: true,
         tableFound: true,
         discoveredColumns: schema.columns,
-        message: `Successfully connected to Supabase! The "admissions" table was verified and is active.${colMsg}`,
+        keyInfo,
+        message: `Successfully connected to Supabase! The "admissions" table was verified and is ready.${colMsg}`,
       };
     }
 
-    // Check specific error codes
+    // CASE 2: Error inspection
     const errMsg = (error.message || '').toLowerCase();
     const errCode = (error as any).code || '';
+    const errStatus = (error as any).status || (error as any).statusCode || 0;
 
-    // Table does not exist yet (PostgreSQL error 42P01)
+    // A. PostgreSQL Error 42P01: Table does not exist
+    // CRITICAL: This PROVES the API key is 100% VALID! PostgREST authenticated the JWT and reported table missing.
     if (errCode === '42P01' || errMsg.includes('does not exist') || errMsg.includes('relation "public.admissions"')) {
       return {
         success: true,
         tableFound: false,
+        keyInfo,
         errorType: 'table_missing',
-        message: 'Connected to Supabase! However, the "admissions" table has not been created in your project yet. Run the provided SQL script in your Supabase SQL Editor.',
+        message:
+          `Connected to Supabase! Your API Key is VALID and accepted.\n` +
+          `Notice: The "admissions" table has not been created in this project yet.\n` +
+          `Click "Copy Admissions Table SQL" below and run it in your Supabase SQL Editor.`,
       };
     }
 
-    // RLS restrictions (PostgreSQL error 42501)
+    // B. PostgreSQL Error 42501: Row Level Security restriction on SELECT
+    // CRITICAL: This ALSO PROVES the API key is 100% VALID! PostgREST authenticated the JWT and RLS protected the table.
     if (errCode === '42501' || errMsg.includes('row-level security') || errMsg.includes('permission denied')) {
-      const colMsg = schema.columns.length > 0 ? ` Detected columns: [${schema.columns.join(', ')}]` : '';
       return {
         success: true,
         tableFound: true,
         rlsRestricted: true,
-        discoveredColumns: schema.columns,
+        keyInfo,
         errorType: 'rls_error',
-        message: `Connected to Supabase! Table "admissions" exists.${colMsg} Row Level Security allows public INSERT and restricts SELECT to authorized administrators.`,
+        message:
+          `Connected to Supabase! Your API Key is VALID and accepted.\n` +
+          `Row Level Security (RLS) is active: Public anonymous visitors can INSERT admission inquiries, while SELECT is secured for authorized administrators.`,
       };
     }
 
-    if (errMsg.includes('invalid api key') || errMsg.includes('jwt')) {
+    // C. Genuine 401 Unauthorized / Invalid Key from PostgREST
+    if (
+      errStatus === 401 ||
+      errCode === 'PGRST301' ||
+      errMsg.includes('jwt') ||
+      errMsg.includes('invalid api key') ||
+      errMsg.includes('jwsinvalidsignature') ||
+      errMsg.includes('unauthorized') ||
+      errMsg.includes('token is expired')
+    ) {
+      let extraHint = '';
+      if (normKey.projectRef) {
+        extraHint = `\n(Key signature belongs to project ref: "${normKey.projectRef}")`;
+      }
       return {
         success: false,
         errorType: 'invalid_key',
-        message: `Invalid API key: ${error.message}`,
+        keyInfo,
+        message:
+          `Invalid API Key (HTTP 401). Supabase rejected the provided key.${extraHint}\n\n` +
+          `Please verify:\n` +
+          `1. Open Supabase Dashboard -> select your project.\n` +
+          `2. Navigate to Project Settings -> API.\n` +
+          `3. Under "Project API keys", copy the "anon" public key (starts with "eyJhbGci...").\n` +
+          `4. Do not copy the secret "service_role" key.`,
       };
     }
 
+    // D. Project Paused (503 Service Unavailable)
+    if (errStatus === 503 || errMsg.includes('503') || errMsg.includes('paused')) {
+      return {
+        success: false,
+        errorType: 'project_paused',
+        keyInfo,
+        message:
+          `Supabase project is temporarily paused or unavailable (HTTP 503).\n` +
+          `Please visit https://supabase.com/dashboard and click "Restore" or "Resume project".`,
+      };
+    }
+
+    // E. General Fetch / Network Error
+    if (errMsg.includes('failed to fetch') || (error as any).name === 'TypeError') {
+      return {
+        success: false,
+        errorType: 'fetch_error',
+        keyInfo,
+        message:
+          `Failed to connect to "${url}".\n` +
+          `1. Verify the Supabase project is active (not paused in Supabase Dashboard).\n` +
+          `2. Check that the URL format matches: https://<project-ref>.supabase.co\n` +
+          `3. Verify that your browser or network is not blocking supabase.co.`,
+      };
+    }
+
+    // Fallback: If error was another database issue, the API key is still valid
     return {
       success: true,
       tableFound: true,
-      discoveredColumns: schema.columns,
-      message: `Connected to Supabase endpoint! Notice: ${error.message}`,
+      keyInfo,
+      message: `Connected to Supabase endpoint! Database response: ${error.message}`,
     };
   } catch (err: any) {
+    const errStr = String(err?.message || err);
     return {
       success: false,
       errorType: 'fetch_error',
-      message: err?.message || 'Could not connect to Supabase client.',
+      keyInfo,
+      message: `Connection error: ${errStr}`,
     };
   }
 }

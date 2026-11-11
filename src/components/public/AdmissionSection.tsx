@@ -8,6 +8,7 @@ import {
   testSupabaseConnection,
   normalizeSupabaseUrl,
   normalizeSupabaseKey,
+  inspectSupabaseKey,
   ConnectionTestResult,
   SUPABASE_ADMISSIONS_TABLE_SQL,
   SUPABASE_SIMPLE_5_COLUMNS_SQL,
@@ -324,9 +325,16 @@ export const AdmissionSection: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-medium text-slate-300 mb-1">
-                    Supabase Project URL
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-medium text-slate-300">
+                      Supabase Project URL
+                    </label>
+                    {normalizeSupabaseUrl(quickUrl).projectRef && (
+                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-1.5 py-0.2 rounded border border-emerald-800/60">
+                        Ref: {normalizeSupabaseUrl(quickUrl).projectRef}
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={quickUrl}
@@ -337,9 +345,16 @@ export const AdmissionSection: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-medium text-slate-300 mb-1">
-                    Anon Public API Key
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-medium text-slate-300">
+                      Anon Public API Key
+                    </label>
+                    {inspectSupabaseKey(quickKey).projectRef && (
+                      <span className="text-[10px] font-mono text-blue-300 bg-blue-950/60 px-1.5 py-0.2 rounded border border-blue-800/60">
+                        Key Ref: {inspectSupabaseKey(quickKey).projectRef}
+                      </span>
+                    )}
+                  </div>
                   <div className="relative">
                     <input
                       type={showQuickKey ? 'text' : 'password'}
@@ -358,6 +373,18 @@ export const AdmissionSection: React.FC = () => {
                     </button>
                   </div>
                 </div>
+
+                {normalizeSupabaseUrl(quickUrl).projectRef &&
+                  inspectSupabaseKey(quickKey).projectRef &&
+                  normalizeSupabaseUrl(quickUrl).projectRef?.toLowerCase() !==
+                    inspectSupabaseKey(quickKey).projectRef?.toLowerCase() && (
+                    <div className="p-2.5 rounded-lg bg-amber-950/80 border border-amber-700 text-amber-200 text-[11px] space-y-1">
+                      <div className="font-bold text-amber-300">Project Reference Mismatch (Causes HTTP 401)</div>
+                      <p>
+                        URL is for <code>{normalizeSupabaseUrl(quickUrl).projectRef}</code>, but key belongs to <code>{inspectSupabaseKey(quickKey).projectRef}</code>.
+                      </p>
+                    </div>
+                  )}
 
                 {testResult && (
                   <div
