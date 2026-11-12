@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AdmissionInquiry, CampusType, Student } from '../../types';
 import { StorageService } from '../../services/storage';
-import { getStoredSupabaseConfig } from '../../services/supabase';
+import { getStoredSupabaseConfig, getSupabase, SUPABASE_FIX_RLS_SQL } from '../../services/supabase';
 import {
   Search,
   Download,
@@ -14,6 +14,9 @@ import {
   RefreshCw,
   Database,
   CheckCircle2,
+  Copy,
+  AlertTriangle,
+  Radio,
 } from 'lucide-react';
 
 interface AdmissionManagerProps {
@@ -30,6 +33,8 @@ export const AdmissionManager: React.FC<AdmissionManagerProps> = ({ campusFilter
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedInquiry, setSelectedInquiry] = useState<AdmissionInquiry | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [copiedSyncSql, setCopiedSyncSql] = useState(false);
+  const [showSyncHelper, setShowSyncHelper] = useState(false);
   const [syncInfo, setSyncInfo] = useState<{
     synced: boolean;
     message: string;
@@ -81,12 +86,37 @@ export const AdmissionManager: React.FC<AdmissionManagerProps> = ({ campusFilter
   useEffect(() => {
     loadFromSupabase(false);
 
-    // Auto-polling: automatically refresh newly submitted admissions every 12 seconds
+    // Set up Supabase Realtime broadcast listener for instant cross-device updates
+    const client = getSupabase();
+    let channel: any = null;
+    if (client) {
+      try {
+        channel = client
+          .channel('public:admissions-live')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'admissions' },
+            () => {
+              loadFromSupabase(true);
+            }
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime subscription fallback to polling:', err);
+      }
+    }
+
+    // Auto-polling backup: refresh newly submitted admissions every 8 seconds
     const interval = setInterval(() => {
       loadFromSupabase(true);
-    }, 12000);
+    }, 8000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (client && channel) {
+        client.removeChannel(channel);
+      }
+    };
   }, []);
 
   const filtered = admissions.filter((inq) => {
@@ -179,7 +209,16 @@ export const AdmissionManager: React.FC<AdmissionManagerProps> = ({ campusFilter
           </p>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            onClick={() => setShowSyncHelper(!showSyncHelper)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-300 bg-amber-950/60 border border-amber-700/80 hover:bg-amber-900/60 rounded-lg cursor-pointer transition-colors"
+            title="Fix Multi-Device Sync & RLS"
+          >
+            <Radio className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            <span>Multi-Device Sync Fix</span>
+          </button>
+
           <button
             onClick={() => loadFromSupabase(false)}
             disabled={isSyncing}
@@ -199,6 +238,51 @@ export const AdmissionManager: React.FC<AdmissionManagerProps> = ({ campusFilter
           </button>
         </div>
       </div>
+
+      {/* Multi-Device Sync Explanation & 1-Click SQL Fix Card */}
+      {showSyncHelper && (
+        <div className="p-5 rounded-2xl bg-slate-950 border border-amber-600/60 text-xs text-slate-200 space-y-3 shadow-2xl">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
+              <Radio className="w-4 h-4" />
+              <span>Fix Multi-Device Synchronization (Supabase RLS Policy)</span>
+            </div>
+            <button
+              onClick={() => setShowSyncHelper(false)}
+              className="text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <p className="text-slate-300 leading-relaxed text-xs">
+            <strong>Why other visitors' submissions were not showing up:</strong> PostgreSQL Row Level Security (RLS) restricts <code className="text-amber-300">SELECT</code> queries for the public anon key unless a policy specifically permits it. Submissions from visitors were saved to Supabase, but the admin panel could not read them due to the restrictive RLS policy.
+          </p>
+
+          <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-amber-300 text-[11px]">
+                Copy & Run this in Supabase SQL Editor to enable shared sync:
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(SUPABASE_FIX_RLS_SQL);
+                  setCopiedSyncSql(true);
+                  setTimeout(() => setCopiedSyncSql(false), 2500);
+                }}
+                className="px-3 py-1.5 text-xs font-bold bg-amber-400 text-slate-950 rounded-lg hover:bg-amber-300 cursor-pointer flex items-center gap-1.5 transition-colors"
+              >
+                {copiedSyncSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedSyncSql ? 'SQL Copied!' : 'Copy Multi-Device Sync SQL'}</span>
+              </button>
+            </div>
+            <pre className="font-mono text-[10px] text-slate-400 max-h-36 overflow-y-auto bg-slate-950 p-2.5 rounded border border-slate-800">
+              {SUPABASE_FIX_RLS_SQL}
+            </pre>
+          </div>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 p-3 bg-slate-900 border border-slate-800 rounded-xl">
@@ -251,14 +335,27 @@ export const AdmissionManager: React.FC<AdmissionManagerProps> = ({ campusFilter
                     <Database className="w-7 h-7 mx-auto text-slate-600 mb-2" />
                     <div className="font-semibold text-sm text-slate-300">
                       {syncInfo.synced
-                        ? 'No admission applications in Supabase admissions table yet.'
+                        ? 'No admission applications found in Supabase admissions table.'
                         : 'No admission records found matching criteria.'}
                     </div>
-                    <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                    <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-4">
                       {syncInfo.synced
-                        ? 'When a student submits the online admission form on the website, their application will appear here automatically.'
+                        ? 'If other visitors already submitted applications but they are not showing up, the Row Level Security (RLS) policy in Supabase needs to allow SELECT.'
                         : 'Configure your Supabase Project in Settings or submit an admission via the public website.'}
                     </p>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(SUPABASE_FIX_RLS_SQL);
+                        setCopiedSyncSql(true);
+                        setTimeout(() => setCopiedSyncSql(false), 2500);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-amber-400 text-slate-950 rounded-lg hover:bg-amber-300 cursor-pointer transition-colors shadow"
+                    >
+                      {copiedSyncSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedSyncSql ? 'Sync Fix SQL Copied!' : 'Copy Multi-Device Sync Fix SQL'}</span>
+                    </button>
                   </td>
                 </tr>
               ) : (

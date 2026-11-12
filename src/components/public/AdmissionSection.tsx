@@ -465,7 +465,7 @@ export const AdmissionSection: React.FC = () => {
                 </div>
 
                 {submissionError && (
-                  <div className="p-4 rounded-xl bg-red-950/80 border border-red-700 text-red-200 text-xs space-y-2">
+                  <div className="p-4 rounded-xl bg-red-950/80 border border-red-700 text-red-200 text-xs space-y-2.5">
                     <div className="flex items-center gap-2 font-bold text-sm text-red-400">
                       <AlertCircle className="w-4 h-4 shrink-0" />
                       <span>Database Insert Failed</span>
@@ -473,13 +473,23 @@ export const AdmissionSection: React.FC = () => {
                     <p className="leading-relaxed opacity-95">
                       {submissionError}
                     </p>
-                    <div className="pt-1.5 flex items-center justify-between text-[11px] border-t border-red-900/60">
-                      <span className="text-red-300">Your inputs were preserved. Please retry or contact the school office.</span>
+                    <div className="pt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] border-t border-red-900/60">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="submit"
+                          disabled={isSubmitting}
+                          className="px-3 py-1 rounded-md bg-amber-400 text-slate-950 font-bold hover:bg-amber-300 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-sm"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isSubmitting ? 'animate-spin' : ''}`} />
+                          <span>Retry Submission Now</span>
+                        </button>
+                        <span className="text-red-300">Your inputs were preserved.</span>
+                      </div>
                       <a
                         href="tel:03401212046"
-                        className="underline font-semibold text-amber-400 hover:text-white cursor-pointer ml-2"
+                        className="underline font-semibold text-amber-400 hover:text-white cursor-pointer"
                       >
-                        Call 0340-1212046
+                        School Office: 0340-1212046
                       </a>
                     </div>
                   </div>

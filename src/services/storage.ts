@@ -17,7 +17,7 @@ import {
   INITIAL_ATTENDANCE,
   INITIAL_ANNOUNCEMENTS,
 } from './initialData';
-import { getSupabase, discoverAdmissionsTableSchema } from './supabase';
+import { getSupabase, discoverAdmissionsTableSchema, getStoredSupabaseConfig } from './supabase';
 
 const KEYS = {
   STUDENTS: 'bss_data_students',
@@ -221,64 +221,106 @@ export const StorageService = {
         };
       }
 
-      // 3. Perform Insert WITHOUT .select() (critical for public RLS policy!)
+      // 3. Primary Engine: Perform Insert via Supabase JS client
       let attempts = 0;
-      while (attempts < 8) {
+      while (attempts < 6) {
         attempts++;
 
-        const { error } = await client
-          .from('admissions')
-          .insert([payload]);
+        try {
+          const { error } = await client
+            .from('admissions')
+            .insert([payload]);
 
-        if (!error) {
-          savedToSupabase = true;
-          errorMessage = undefined;
+          if (!error) {
+            savedToSupabase = true;
+            errorMessage = undefined;
+            break;
+          }
+
+          const errStr = error.message || '';
+
+          // Check if error is due to a column not existing in the user's table
+          const colMatch =
+            errStr.match(/Could not find the ['"]?([a-zA-Z0-9_]+)['"]? column of ['"]?admissions['"]?/i) ||
+            errStr.match(/column ['"]?([a-zA-Z0-9_]+)['"]? of relation ['"]?admissions['"]? does not exist/i) ||
+            errStr.match(/column admissions\.([a-zA-Z0-9_]+) does not exist/i);
+
+          if (colMatch && colMatch[1]) {
+            const missingCol = colMatch[1];
+            delete payload[missingCol];
+
+            // If a core field was missing, try its common alias
+            if (missingCol === 'applicant_name' && !payload['student_name']) {
+              payload['student_name'] = inquiryData.applicant_name.trim();
+            } else if (missingCol === 'father_name' && !payload['guardian_name']) {
+              payload['guardian_name'] = inquiryData.father_name.trim();
+            } else if (missingCol === 'guardian_phone' && !payload['phone']) {
+              payload['phone'] = inquiryData.guardian_phone.trim();
+            } else if (missingCol === 'applied_grade' && !payload['grade']) {
+              payload['grade'] = `Grade ${inquiryData.applied_grade}`;
+            } else if (missingCol === 'campus_id' && !payload['campus']) {
+              payload['campus'] = inquiryData.campus_id;
+            }
+            continue; // Retry with pruned payload
+          }
+
+          // Check if grade type mismatch
+          if (errStr.includes('invalid input syntax for type integer') && payload['grade']) {
+            delete payload['grade'];
+            payload['applied_grade'] = Number(inquiryData.applied_grade);
+            continue;
+          }
+
+          // Check if id was passed and caused uuid error
+          if (errStr.includes('invalid input syntax for type uuid') && payload['id']) {
+            delete payload['id'];
+            continue;
+          }
+
+          errorMessage = errStr;
+          break;
+        } catch (clientErr: any) {
+          console.warn('Supabase JS client insert threw, trying direct REST fallback:', clientErr);
+          errorMessage = clientErr?.message || 'Client fetch error';
           break;
         }
+      }
 
-        const errStr = error.message || '';
+      // 4. Secondary Engine: Direct PostgREST REST API Fallback
+      // Guarantees insertion even if browser adblocker or JS client wrapper encountered an issue
+      if (!savedToSupabase) {
+        try {
+          const cfg = getStoredSupabaseConfig();
+          const directRes = await fetch(`${cfg.url}/rest/v1/admissions`, {
+            method: 'POST',
+            headers: {
+              apikey: cfg.anonKey,
+              Authorization: `Bearer ${cfg.anonKey}`,
+              'Content-Type': 'application/json',
+              Prefer: 'return=minimal',
+            },
+            body: JSON.stringify(payload),
+          });
 
-        // Check if error is due to a column not existing in the user's table
-        const colMatch =
-          errStr.match(/Could not find the ['"]?([a-zA-Z0-9_]+)['"]? column of ['"]?admissions['"]?/i) ||
-          errStr.match(/column ['"]?([a-zA-Z0-9_]+)['"]? of relation ['"]?admissions['"]? does not exist/i) ||
-          errStr.match(/column admissions\.([a-zA-Z0-9_]+) does not exist/i);
-
-        if (colMatch && colMatch[1]) {
-          const missingCol = colMatch[1];
-          delete payload[missingCol];
-
-          // If a core field was missing, try its common alias
-          if (missingCol === 'applicant_name' && !payload['student_name']) {
-            payload['student_name'] = inquiryData.applicant_name.trim();
-          } else if (missingCol === 'father_name' && !payload['guardian_name']) {
-            payload['guardian_name'] = inquiryData.father_name.trim();
-          } else if (missingCol === 'guardian_phone' && !payload['phone']) {
-            payload['phone'] = inquiryData.guardian_phone.trim();
-          } else if (missingCol === 'applied_grade' && !payload['grade']) {
-            payload['grade'] = `Grade ${inquiryData.applied_grade}`;
-          } else if (missingCol === 'campus_id' && !payload['campus']) {
-            payload['campus'] = inquiryData.campus_id;
+          if (directRes.status === 201 || directRes.status === 200 || directRes.status === 204) {
+            savedToSupabase = true;
+            errorMessage = undefined;
+          } else {
+            const errData = await directRes.json().catch(() => null);
+            if (errData?.message) {
+              errorMessage = errData.message;
+            }
           }
-          continue; // Retry with pruned payload
+        } catch (directErr: any) {
+          console.warn('Direct REST fallback caught exception:', directErr);
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            errorMessage = 'Your device appears to be offline. Please verify your internet connection.';
+          } else {
+            errorMessage =
+              'Connection to Supabase database was blocked by the browser or network. ' +
+              'Please check if an adblocker (e.g. Brave Shields, uBlock) or firewall is blocking supabase.co.';
+          }
         }
-
-        // Check if grade type mismatch
-        if (errStr.includes('invalid input syntax for type integer') && payload['grade']) {
-          delete payload['grade'];
-          payload['applied_grade'] = Number(inquiryData.applied_grade);
-          continue;
-        }
-
-        // Check if id was passed and caused uuid error
-        if (errStr.includes('invalid input syntax for type uuid') && payload['id']) {
-          delete payload['id'];
-          continue;
-        }
-
-        // Fatal/Unrecoverable error (e.g. RLS policy violation or network failure)
-        errorMessage = errStr;
-        break;
       }
     } catch (err: any) {
       console.warn('Supabase query exception:', err);
@@ -296,11 +338,15 @@ export const StorageService = {
         savedToSupabase: true,
       };
     } else {
+      let friendlyError = errorMessage || 'Database insert failed. Please verify Supabase URL, API Key, and RLS policies.';
+      if (friendlyError.toLowerCase().includes('failed to fetch')) {
+        friendlyError = 'Network connection failed (TypeError: Failed to fetch). Please check your internet connection or click "Retry Now".';
+      }
       return {
         success: false,
         inquiry: createdInquiry,
         savedToSupabase: false,
-        error: errorMessage || 'Database insert failed. Please verify Supabase URL, API Key, and RLS policies.',
+        error: friendlyError,
       };
     }
   },
