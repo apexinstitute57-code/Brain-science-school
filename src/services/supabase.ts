@@ -693,65 +693,8 @@ export async function testSupabaseConnection(rawUrl: string, rawKey: string): Pr
 }
 
 /**
- * SQL script specifically designed to fix Multi-Device Synchronization & RLS.
- * When other visitors submit admissions on Netlify or mobile, Supabase must allow
- * the admin dashboard to SELECT those rows using the anon/publishable key.
- */
-export const SUPABASE_FIX_RLS_SQL = `-- Brain Science School Zafarwal - Multi-Device Shared Sync Fix
--- Run this in your Supabase Project -> SQL Editor to allow all devices and visitors to sync!
-
--- 1. Ensure table has RLS enabled
-ALTER TABLE public.admissions ENABLE ROW LEVEL SECURITY;
-
--- 2. Clean up old restrictive policies
-DROP POLICY IF EXISTS "authenticated_admissions_select" ON public.admissions;
-DROP POLICY IF EXISTS "public_admissions_insert" ON public.admissions;
-DROP POLICY IF EXISTS "authenticated_admissions_update" ON public.admissions;
-DROP POLICY IF EXISTS "allow_all_admissions_select" ON public.admissions;
-DROP POLICY IF EXISTS "allow_all_admissions_insert" ON public.admissions;
-DROP POLICY IF EXISTS "allow_all_admissions_update" ON public.admissions;
-DROP POLICY IF EXISTS "Allow public select to admissions" ON public.admissions;
-DROP POLICY IF EXISTS "Allow public insert to admissions" ON public.admissions;
-
--- 3. Allow ANY visitor / applicant to INSERT new admission applications
-CREATE POLICY "allow_all_admissions_insert" 
-ON public.admissions 
-FOR INSERT 
-TO anon, authenticated 
-WITH CHECK (true);
-
--- 4. Allow reading admission records so admin dashboard syncs across all devices & browsers
-CREATE POLICY "allow_all_admissions_select" 
-ON public.admissions 
-FOR SELECT 
-TO anon, authenticated 
-USING (true);
-
--- 5. Allow updating admission records (interview, status change, enrollment)
-CREATE POLICY "allow_all_admissions_update" 
-ON public.admissions 
-FOR UPDATE 
-TO anon, authenticated 
-USING (true) 
-WITH CHECK (true);
-
--- 6. Enable Realtime updates so new admissions show up instantly without page refresh
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_publication_tables 
-    WHERE pubname = 'supabase_realtime' 
-    AND schemaname = 'public' 
-    AND tablename = 'admissions'
-  ) THEN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.admissions;
-  END IF;
-END $$;
-`;
-
-/**
  * Production-ready SQL script to create the 'admissions' table with all needed columns
- * and complete RLS policies for public INSERT and multi-device shared sync.
+ * and complete RLS policies for public INSERT and admin SELECT/UPDATE.
  */
 export const SUPABASE_ADMISSIONS_TABLE_SQL = `-- Brain Science School Zafarwal - Admissions Table & RLS Policies
 -- Run this in your Supabase Project -> SQL Editor to initialize the admissions table
@@ -792,44 +735,29 @@ DROP POLICY IF EXISTS "Allow public select to admissions" ON public.admissions;
 DROP POLICY IF EXISTS "public_admissions_insert" ON public.admissions;
 DROP POLICY IF EXISTS "authenticated_admissions_select" ON public.admissions;
 DROP POLICY IF EXISTS "authenticated_admissions_update" ON public.admissions;
-DROP POLICY IF EXISTS "allow_all_admissions_insert" ON public.admissions;
-DROP POLICY IF EXISTS "allow_all_admissions_select" ON public.admissions;
-DROP POLICY IF EXISTS "allow_all_admissions_update" ON public.admissions;
 
 -- 1. Allow public applicants (anon and authenticated) to submit admission applications
-CREATE POLICY "allow_all_admissions_insert" 
+CREATE POLICY "public_admissions_insert" 
 ON public.admissions 
 FOR INSERT 
 TO anon, authenticated 
 WITH CHECK (true);
 
--- 2. Allow SELECT for shared multi-device sync across visitors and admin dashboard
-CREATE POLICY "allow_all_admissions_select" 
+-- 2. Allow ONLY authenticated administrators to read student admission applications
+-- (Public anonymous visitors CANNOT read student applications, protecting student data privacy)
+CREATE POLICY "authenticated_admissions_select" 
 ON public.admissions 
 FOR SELECT 
-TO anon, authenticated 
+TO authenticated 
 USING (true);
 
--- 3. Allow status updates from admin dashboard
-CREATE POLICY "allow_all_admissions_update" 
+-- 3. Allow authenticated administrators to update admission status, interview notes, and enrollment
+CREATE POLICY "authenticated_admissions_update" 
 ON public.admissions 
 FOR UPDATE 
-TO anon, authenticated 
+TO authenticated 
 USING (true) 
 WITH CHECK (true);
-
--- 4. Enable Supabase Realtime for instant synchronization
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_publication_tables 
-    WHERE pubname = 'supabase_realtime' 
-    AND schemaname = 'public' 
-    AND tablename = 'admissions'
-  ) THEN
-    ALTER PUBLICATION supabase_realtime ADD TABLE public.admissions;
-  END IF;
-END $$;
 `;
 
 export const SUPABASE_SIMPLE_5_COLUMNS_SQL = `-- Minimal 5-Field Admissions Table (with RLS: Public INSERT, Admin SELECT)

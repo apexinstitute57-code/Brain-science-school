@@ -151,7 +151,7 @@ export const StorageService = {
         success: false,
         inquiry: createdInquiry,
         savedToSupabase: false,
-        error: 'Supabase is not connected. Please verify Supabase URL and Key.',
+        error: 'Supabase is not connected. Please enter your Supabase Project URL and Public API Key in Settings.',
       };
     }
 
@@ -163,29 +163,63 @@ export const StorageService = {
       const schema = await discoverAdmissionsTableSchema(client);
       const knownCols = schema.columns.map((c) => c.toLowerCase());
 
-      // 2. Build guaranteed payload matching all 8 NOT NULL constraints
-      // Required: tracking_no, applicant_name, father_name, gender, campus_id, applied_grade, guardian_phone, address
-      let payload: Record<string, any> = {
-        tracking_no: trackingCode,
-        applicant_name: inquiryData.applicant_name.trim(),
-        father_name: inquiryData.father_name.trim(),
-        gender: inquiryData.gender || 'male',
-        campus_id: inquiryData.campus_id || 'boys',
-        applied_grade: Number(inquiryData.applied_grade) || 9,
-        guardian_phone: inquiryData.guardian_phone.trim(),
-        address: inquiryData.address.trim() || 'Zafarwal, Punjab',
-        previous_school: inquiryData.previous_school?.trim() || null,
-        status: inquiryData.status || 'pending',
-        notes: inquiryData.notes || 'Submitted via Online Admission Form',
-        guardian_cnic: inquiryData.guardian_cnic || null,
-      };
+      // 2. Build exact column payload (never send 'id' so PostgreSQL generates clean UUID)
+      let payload: Record<string, any> = {};
 
-      // Add compatible alias columns if the table uses different naming
-      if (knownCols.includes('student_name')) payload['student_name'] = inquiryData.applicant_name.trim();
-      if (knownCols.includes('guardian_name')) payload['guardian_name'] = inquiryData.father_name.trim();
-      if (knownCols.includes('phone')) payload['phone'] = inquiryData.guardian_phone.trim();
-      if (knownCols.includes('grade')) payload['grade'] = `Grade ${inquiryData.applied_grade}`;
-      if (knownCols.includes('campus')) payload['campus'] = inquiryData.campus_id || 'boys';
+      if (knownCols.length > 0) {
+        // Map to exact discovered columns in public.admissions
+        if (knownCols.includes('tracking_no')) payload['tracking_no'] = trackingCode;
+        else if (knownCols.includes('tracking_number')) payload['tracking_number'] = trackingCode;
+        else if (knownCols.includes('application_no')) payload['application_no'] = trackingCode;
+
+        if (knownCols.includes('applicant_name')) payload['applicant_name'] = inquiryData.applicant_name.trim();
+        else if (knownCols.includes('student_name')) payload['student_name'] = inquiryData.applicant_name.trim();
+        else if (knownCols.includes('full_name')) payload['full_name'] = inquiryData.applicant_name.trim();
+        else if (knownCols.includes('name')) payload['name'] = inquiryData.applicant_name.trim();
+
+        if (knownCols.includes('father_name')) payload['father_name'] = inquiryData.father_name.trim();
+        else if (knownCols.includes('guardian_name')) payload['guardian_name'] = inquiryData.father_name.trim();
+        else if (knownCols.includes('parent_name')) payload['parent_name'] = inquiryData.father_name.trim();
+
+        if (knownCols.includes('guardian_phone')) payload['guardian_phone'] = inquiryData.guardian_phone.trim();
+        else if (knownCols.includes('phone')) payload['phone'] = inquiryData.guardian_phone.trim();
+        else if (knownCols.includes('contact_no')) payload['contact_no'] = inquiryData.guardian_phone.trim();
+        else if (knownCols.includes('mobile')) payload['mobile'] = inquiryData.guardian_phone.trim();
+
+        if (knownCols.includes('applied_grade')) {
+          const type = schema.columnDetails['applied_grade']?.type;
+          payload['applied_grade'] = type === 'string' ? String(inquiryData.applied_grade) : Number(inquiryData.applied_grade);
+        } else if (knownCols.includes('grade')) {
+          payload['grade'] = `Grade ${inquiryData.applied_grade}`;
+        } else if (knownCols.includes('class')) {
+          payload['class'] = Number(inquiryData.applied_grade);
+        }
+
+        if (knownCols.includes('gender')) payload['gender'] = inquiryData.gender;
+        if (knownCols.includes('campus_id')) payload['campus_id'] = inquiryData.campus_id;
+        else if (knownCols.includes('campus')) payload['campus'] = inquiryData.campus_id;
+
+        if (knownCols.includes('address')) payload['address'] = inquiryData.address.trim();
+        if (knownCols.includes('previous_school')) payload['previous_school'] = inquiryData.previous_school?.trim() || null;
+        if (knownCols.includes('status')) payload['status'] = inquiryData.status || 'pending';
+        if (knownCols.includes('notes')) payload['notes'] = inquiryData.notes || 'Submitted via Online Admission Form';
+        if (knownCols.includes('guardian_cnic')) payload['guardian_cnic'] = inquiryData.guardian_cnic || null;
+      } else {
+        // Fallback default payload if schema discovery was restricted
+        payload = {
+          tracking_no: trackingCode,
+          applicant_name: inquiryData.applicant_name.trim(),
+          father_name: inquiryData.father_name.trim(),
+          gender: inquiryData.gender,
+          campus_id: inquiryData.campus_id,
+          applied_grade: Number(inquiryData.applied_grade),
+          guardian_phone: inquiryData.guardian_phone.trim(),
+          address: inquiryData.address.trim(),
+          previous_school: inquiryData.previous_school?.trim() || null,
+          status: inquiryData.status || 'pending',
+          notes: inquiryData.notes || 'Submitted via Online Admission Form',
+        };
+      }
 
       // 3. Perform Insert WITHOUT .select() (critical for public RLS policy!)
       let attempts = 0;
@@ -204,7 +238,7 @@ export const StorageService = {
 
         const errStr = error.message || '';
 
-        // If a column doesn't exist, prune it and retry
+        // Check if error is due to a column not existing in the user's table
         const colMatch =
           errStr.match(/Could not find the ['"]?([a-zA-Z0-9_]+)['"]? column of ['"]?admissions['"]?/i) ||
           errStr.match(/column ['"]?([a-zA-Z0-9_]+)['"]? of relation ['"]?admissions['"]? does not exist/i) ||
@@ -213,34 +247,36 @@ export const StorageService = {
         if (colMatch && colMatch[1]) {
           const missingCol = colMatch[1];
           delete payload[missingCol];
-          continue;
+
+          // If a core field was missing, try its common alias
+          if (missingCol === 'applicant_name' && !payload['student_name']) {
+            payload['student_name'] = inquiryData.applicant_name.trim();
+          } else if (missingCol === 'father_name' && !payload['guardian_name']) {
+            payload['guardian_name'] = inquiryData.father_name.trim();
+          } else if (missingCol === 'guardian_phone' && !payload['phone']) {
+            payload['phone'] = inquiryData.guardian_phone.trim();
+          } else if (missingCol === 'applied_grade' && !payload['grade']) {
+            payload['grade'] = `Grade ${inquiryData.applied_grade}`;
+          } else if (missingCol === 'campus_id' && !payload['campus']) {
+            payload['campus'] = inquiryData.campus_id;
+          }
+          continue; // Retry with pruned payload
         }
 
-        // If grade type syntax error
+        // Check if grade type mismatch
         if (errStr.includes('invalid input syntax for type integer') && payload['grade']) {
           delete payload['grade'];
           payload['applied_grade'] = Number(inquiryData.applied_grade);
           continue;
         }
 
-        // If UUID error
+        // Check if id was passed and caused uuid error
         if (errStr.includes('invalid input syntax for type uuid') && payload['id']) {
           delete payload['id'];
           continue;
         }
 
-        // Not-null constraint violation: ensure fallback value is supplied
-        const nullMatch = errStr.match(/null value in column "([^"]+)" of relation "admissions" violates not-null constraint/i);
-        if (nullMatch && nullMatch[1]) {
-          const nullCol = nullMatch[1];
-          if (nullCol === 'gender') payload['gender'] = 'male';
-          else if (nullCol === 'campus_id') payload['campus_id'] = 'boys';
-          else if (nullCol === 'applied_grade') payload['applied_grade'] = 9;
-          else if (nullCol === 'address') payload['address'] = 'Zafarwal';
-          else payload[nullCol] = 'N/A';
-          continue;
-        }
-
+        // Fatal/Unrecoverable error (e.g. RLS policy violation or network failure)
         errorMessage = errStr;
         break;
       }
@@ -270,8 +306,8 @@ export const StorageService = {
   },
 
   /**
-   * Fetches latest admissions records directly from the Supabase 'admissions' table.
-   * Ensures shared data synchronization across all devices and visitors.
+   * Fetches latest admissions records from the Supabase 'admissions' table.
+   * Maps remote columns, avoids fake/mock data when connected, and handles offline states.
    */
   async fetchAdmissionsFromSupabase(): Promise<{
     admissions: AdmissionInquiry[];
@@ -284,7 +320,7 @@ export const StorageService = {
       return {
         admissions: [],
         fromSupabase: false,
-        error: 'Supabase client not connected.',
+        error: 'Supabase client not connected. Configure credentials in Settings.',
       };
     }
 
@@ -323,7 +359,7 @@ export const StorageService = {
           notes: String(row.notes || ''),
         }));
 
-        // Keep local cache updated with real Supabase records
+        // Return real records from Supabase directly (do NOT inject fake mock data)
         save(KEYS.ADMISSIONS, remoteAdmissions);
 
         return {
