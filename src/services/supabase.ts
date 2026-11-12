@@ -189,11 +189,19 @@ export function normalizeSupabaseKey(input: string): {
 }
 
 export function getStoredSupabaseConfig(): { url: string; anonKey: string } {
-  const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-  const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+  let envUrl = '';
+  let envKey = '';
+  try {
+    envUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+    envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+  } catch {}
 
-  const localUrl = localStorage.getItem(SUPABASE_URL_KEY) || envUrl;
-  const localKey = localStorage.getItem(SUPABASE_KEY_KEY) || envKey;
+  let localUrl = envUrl;
+  let localKey = envKey;
+  try {
+    localUrl = localStorage.getItem(SUPABASE_URL_KEY) || envUrl;
+    localKey = localStorage.getItem(SUPABASE_KEY_KEY) || envKey;
+  } catch {}
 
   const normUrl = normalizeSupabaseUrl(localUrl);
   const normKey = normalizeSupabaseKey(localKey);
@@ -215,11 +223,13 @@ export function saveStoredSupabaseConfig(url: string, anonKey: string): { succes
     return { success: false, error: normKey.error };
   }
 
-  if (normUrl.url) localStorage.setItem(SUPABASE_URL_KEY, normUrl.url);
-  else localStorage.removeItem(SUPABASE_URL_KEY);
+  try {
+    if (normUrl.url) localStorage.setItem(SUPABASE_URL_KEY, normUrl.url);
+    else localStorage.removeItem(SUPABASE_URL_KEY);
 
-  if (normKey.key) localStorage.setItem(SUPABASE_KEY_KEY, normKey.key);
-  else localStorage.removeItem(SUPABASE_KEY_KEY);
+    if (normKey.key) localStorage.setItem(SUPABASE_KEY_KEY, normKey.key);
+    else localStorage.removeItem(SUPABASE_KEY_KEY);
+  } catch {}
 
   // Invalidate any existing client instance
   supabaseInstance = null;
@@ -228,8 +238,10 @@ export function saveStoredSupabaseConfig(url: string, anonKey: string): { succes
 }
 
 export function disconnectSupabase(): void {
-  localStorage.removeItem(SUPABASE_URL_KEY);
-  localStorage.removeItem(SUPABASE_KEY_KEY);
+  try {
+    localStorage.removeItem(SUPABASE_URL_KEY);
+    localStorage.removeItem(SUPABASE_KEY_KEY);
+  } catch {}
   supabaseInstance = null;
 }
 

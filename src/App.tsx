@@ -18,7 +18,11 @@ export default function App() {
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [adminUser, setAdminUser] = useState<string | null>(() => {
-    return localStorage.getItem('bss_admin_user') || null;
+    try {
+      return localStorage.getItem('bss_admin_user') || null;
+    } catch {
+      return null;
+    }
   });
 
   const handleOpenAdminPortal = () => {
@@ -31,14 +35,18 @@ export default function App() {
 
   const handleLoginSuccess = (userEmail: string) => {
     setAdminUser(userEmail);
-    localStorage.setItem('bss_admin_user', userEmail);
+    try {
+      localStorage.setItem('bss_admin_user', userEmail);
+    } catch {}
     setIsLoginModalOpen(false);
     setViewMode('admin');
   };
 
   const handleLogout = () => {
     setAdminUser(null);
-    localStorage.removeItem('bss_admin_user');
+    try {
+      localStorage.removeItem('bss_admin_user');
+    } catch {}
     setViewMode('public');
   };
 
