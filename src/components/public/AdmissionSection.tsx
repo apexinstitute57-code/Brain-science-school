@@ -60,27 +60,11 @@ export const AdmissionSection: React.FC = () => {
     detail: string;
   } | null>(null);
 
-  // Supabase Quick Config Panel
-  const [showConfigDrawer, setShowConfigDrawer] = useState(false);
   const [showPromptDrawer, setShowPromptDrawer] = useState(false);
-  const [quickUrl, setQuickUrl] = useState('');
-  const [quickKey, setQuickKey] = useState('');
-  const [showQuickKey, setShowQuickKey] = useState(false);
-  const [isConfigured, setIsConfigured] = useState(false);
-  const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
-  const [isTesting, setIsTesting] = useState(false);
-
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
   const [copiedSimpleSql, setCopiedSimpleSql] = useState(false);
   const [sqlMode, setSqlMode] = useState<'minimal' | 'full'>('minimal');
-
-  useEffect(() => {
-    const config = getStoredSupabaseConfig();
-    setQuickUrl(config.url);
-    setQuickKey(config.anonKey);
-    setIsConfigured(Boolean(config.url && config.anonKey));
-  }, []);
 
   const handleGenderChange = (gender: Gender) => {
     const campus: CampusType = gender === 'female' ? 'girls' : 'boys';
@@ -134,7 +118,7 @@ export const AdmissionSection: React.FC = () => {
 
     setIsSubmitting(false);
 
-    // TASK 3: Never show success without a successful insert!
+    // Never show success without a successful insert!
     if (result.savedToSupabase) {
       setSubmittedInquiry(result.inquiry);
       setSubmissionError(null);
@@ -159,58 +143,9 @@ export const AdmissionSection: React.FC = () => {
       setSubmittedInquiry(null);
       setSubmissionError(
         result.error ||
-        'Database Insert Failed: Unable to insert into Supabase admissions table. Please check your Supabase Project URL, API Key, and RLS policies.'
+        'Database Insert Failed: Unable to insert into Supabase admissions table. Please verify Supabase connection.'
       );
     }
-  };
-
-  const handleSaveQuickConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsTesting(true);
-    setTestResult(null);
-
-    const normUrl = normalizeSupabaseUrl(quickUrl);
-    const normKey = normalizeSupabaseKey(quickKey);
-
-    if (normUrl.url && normUrl.url !== quickUrl) {
-      setQuickUrl(normUrl.url);
-    }
-    if (normKey.key && normKey.key !== quickKey) {
-      setQuickKey(normKey.key);
-    }
-
-    if (normKey.isServiceRole) {
-      setTestResult({
-        success: false,
-        errorType: 'invalid_key',
-        message: 'Security Alert: Do not use the service_role key in browser! Use anon public key.',
-      });
-      setIsTesting(false);
-      return;
-    }
-
-    const saveRes = saveStoredSupabaseConfig(normUrl.url || quickUrl, normKey.key || quickKey);
-    if (!saveRes.success) {
-      setTestResult({
-        success: false,
-        message: saveRes.error || 'Failed to save configuration.',
-      });
-      setIsTesting(false);
-      return;
-    }
-
-    const res = await testSupabaseConnection(normUrl.url || quickUrl, normKey.key || quickKey);
-    setTestResult(res);
-    setIsTesting(false);
-    setIsConfigured(res.success);
-  };
-
-  const handleDisconnectQuick = () => {
-    disconnectSupabase();
-    setQuickUrl('');
-    setQuickKey('');
-    setIsConfigured(false);
-    setTestResult(null);
   };
 
   const resetForm = () => {
@@ -234,26 +169,16 @@ export const AdmissionSection: React.FC = () => {
     <section id="admissions" className="py-20 md:py-28 bg-slate-900 text-white">
       <div className="container mx-auto px-4 sm:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
-          {/* Left Column: Guidelines, Status & Supabase Prompt Trigger */}
+          {/* Left Column: School Admission Guidelines, Criteria & Helpline */}
           <div className="lg:col-span-5 space-y-6">
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold uppercase tracking-widest text-amber-400">
-                Official Admission Form
+                Official Admission Portal
               </span>
               <span aria-hidden="true" className="text-slate-600">·</span>
-              <span
-                className={`text-[11px] font-mono font-semibold px-2 py-0.5 rounded flex items-center gap-1.5 ${
-                  isConfigured
-                    ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                    : 'bg-amber-950/80 text-amber-300 border border-amber-800'
-                }`}
-              >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    isConfigured ? 'bg-emerald-400' : 'bg-amber-400'
-                  }`}
-                />
-                <span>{isConfigured ? 'Supabase Connected' : 'Supabase: Not Yet Connected'}</span>
+              <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Session 2025–2026 Open</span>
               </span>
             </div>
 
@@ -261,189 +186,75 @@ export const AdmissionSection: React.FC = () => {
               Brain Science School Admissions
             </h2>
             <p className="text-sm text-slate-300 leading-relaxed">
-              This is the official online admission form for Brain Science School Zafarwal. It directly connects to the Supabase database to store prospective student applications.
+              Welcome to the official online admission portal for Brain Science School Zafarwal. Submit prospective student details below for Class 1 to Class 10 (separate Boys and Girls campuses).
             </p>
 
-            {/* Supabase Prompt & Setup Action Box */}
-            <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-400">
-                  <Database className="w-4 h-4" />
-                  <span>Supabase Database Prompt & SQL</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowPromptDrawer(!showPromptDrawer)}
-                  className="text-xs text-amber-300 hover:text-white underline cursor-pointer"
-                >
-                  {showPromptDrawer ? 'Hide Details' : 'View AI Prompt'}
-                </button>
+            {/* Checklist: Required Documents */}
+            <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 shadow-lg">
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-400">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span>Required Documents for Final Admission</span>
               </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Need to create the <code className="text-amber-300 bg-slate-900 px-1 py-0.5 rounded">admissions</code> table in Supabase? Copy the AI prompt or SQL query below.
-              </p>
-
-              <div className="flex flex-wrap gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowPromptDrawer(true)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 cursor-pointer flex items-center gap-1.5"
-                >
-                  <Terminal className="w-3.5 h-3.5 text-amber-400" />
-                  <span>AI Prompt for Supabase</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowConfigDrawer(!showConfigDrawer)}
-                  className="px-3 py-1.5 rounded-lg bg-blue-950 hover:bg-blue-900 border border-blue-800 text-xs font-medium text-blue-200 cursor-pointer flex items-center gap-1.5"
-                >
-                  <Settings className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Connect Project Keys</span>
-                </button>
-              </div>
+              <ul className="text-xs text-slate-300 space-y-2 leading-relaxed">
+                <li className="flex items-start gap-2">
+                  <span className="text-amber-400 font-bold">1.</span>
+                  <span>NADRA Form-B or official Birth Certificate photocopy.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-amber-400 font-bold">2.</span>
+                  <span>4 recent passport-size photographs with blue background.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-amber-400 font-bold">3.</span>
+                  <span>Father or Guardian CNIC photocopy.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-amber-400 font-bold">4.</span>
+                  <span>Previous School Leaving Certificate & result card (for Classes 2–10).</span>
+                </li>
+              </ul>
             </div>
 
-            {/* Quick Supabase Configuration Drawer */}
-            {showConfigDrawer && (
-              <form onSubmit={handleSaveQuickConfig} className="p-5 rounded-2xl bg-slate-950 border border-blue-800 space-y-3.5 shadow-2xl">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-2">
-                    <Settings className="w-4 h-4 text-amber-400" />
-                    <span>Connect Your Supabase Project</span>
-                  </h4>
-                  {isConfigured && (
-                    <button
-                      type="button"
-                      onClick={handleDisconnectQuick}
-                      className="text-[11px] text-red-400 hover:text-red-300 flex items-center gap-1 cursor-pointer"
-                      title="Clear stored keys"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      <span>Disconnect</span>
-                    </button>
-                  )}
+            {/* Academic Highlights */}
+            <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-400">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>Campuses & Facilities Highlights</span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Separate purpose-built wings for boys and girls, fully equipped Physics, Chemistry, Biology and Computer laboratories, digital audio-visual classrooms, and special fee concession for orphan and deserving position-holder students.
+              </p>
+            </div>
+
+            {/* Principal Office & Helpline Box */}
+            <div className="p-5 rounded-2xl bg-blue-950/50 border border-blue-800/80 text-xs text-slate-300 space-y-2 shadow-lg">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                  Admission Office & Helpline
                 </div>
+                <span className="text-[10px] bg-blue-900/80 text-blue-200 px-2 py-0.5 rounded border border-blue-700 font-mono">
+                  Zafarwal, Punjab
+                </span>
+              </div>
+              <div className="font-mono text-lg text-amber-400 font-bold">
+                0340-1212046
+              </div>
+              <p className="text-slate-300 text-xs">
+                Principal: <strong className="text-white">Shahid Javed</strong> · Brain Science School, Circular Road & Model Town, Zafarwal.
+              </p>
+            </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-[11px] font-medium text-slate-300">
-                      Supabase Project URL
-                    </label>
-                    {normalizeSupabaseUrl(quickUrl).projectRef && (
-                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-1.5 py-0.2 rounded border border-emerald-800/60">
-                        Ref: {normalizeSupabaseUrl(quickUrl).projectRef}
-                      </span>
-                    )}
-                  </div>
-                  <input
-                    type="text"
-                    value={quickUrl}
-                    onChange={(e) => setQuickUrl(e.target.value)}
-                    placeholder="https://xyzcompany.supabase.co"
-                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white text-xs font-mono placeholder:text-slate-600 focus:outline-none focus:border-amber-400"
-                  />
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-[11px] font-medium text-slate-300">
-                      Anon Public API Key
-                    </label>
-                    {inspectSupabaseKey(quickKey).projectRef && (
-                      <span className="text-[10px] font-mono text-blue-300 bg-blue-950/60 px-1.5 py-0.2 rounded border border-blue-800/60">
-                        Key Ref: {inspectSupabaseKey(quickKey).projectRef}
-                      </span>
-                    )}
-                  </div>
-                  <div className="relative">
-                    <input
-                      type={showQuickKey ? 'text' : 'password'}
-                      value={quickKey}
-                      onChange={(e) => setQuickKey(e.target.value)}
-                      placeholder="eyJhbGciOi..."
-                      className="w-full pl-3 pr-9 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white text-xs font-mono placeholder:text-slate-600 focus:outline-none focus:border-amber-400"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowQuickKey(!showQuickKey)}
-                      className="absolute right-2.5 top-2.5 text-slate-500 hover:text-white cursor-pointer"
-                      title={showQuickKey ? 'Hide key' : 'Show key'}
-                    >
-                      {showQuickKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
-                </div>
-
-                {normalizeSupabaseUrl(quickUrl).projectRef &&
-                  inspectSupabaseKey(quickKey).projectRef &&
-                  normalizeSupabaseUrl(quickUrl).projectRef?.toLowerCase() !==
-                    inspectSupabaseKey(quickKey).projectRef?.toLowerCase() && (
-                    <div className="p-2.5 rounded-lg bg-amber-950/80 border border-amber-700 text-amber-200 text-[11px] space-y-1">
-                      <div className="font-bold text-amber-300">Project Reference Mismatch (Causes HTTP 401)</div>
-                      <p>
-                        URL is for <code>{normalizeSupabaseUrl(quickUrl).projectRef}</code>, but key belongs to <code>{inspectSupabaseKey(quickKey).projectRef}</code>.
-                      </p>
-                    </div>
-                  )}
-
-                {testResult && (
-                  <div
-                    className={`p-3 rounded-lg text-xs leading-relaxed space-y-1 ${
-                      testResult.success
-                        ? testResult.tableFound === false
-                          ? 'bg-amber-950/80 border border-amber-800 text-amber-200'
-                          : 'bg-emerald-950/80 border border-emerald-800 text-emerald-200'
-                        : 'bg-red-950/80 border border-red-800 text-red-200'
-                    }`}
-                  >
-                    <div className="font-semibold flex items-center gap-1.5">
-                      {testResult.success ? (
-                        testResult.tableFound === false ? (
-                          <Clock className="w-3.5 h-3.5 text-amber-400" />
-                        ) : (
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        )
-                      ) : testResult.errorType === 'offline' ? (
-                        <WifiOff className="w-3.5 h-3.5 text-red-400" />
-                      ) : (
-                        <AlertCircle className="w-3.5 h-3.5 text-red-400" />
-                      )}
-                      <span>
-                        {testResult.success
-                          ? testResult.tableFound === false
-                            ? 'Connected to Project (Table Setup Needed)'
-                            : 'Connected & Verified!'
-                          : 'Connection Error'}
-                      </span>
-                    </div>
-                    <p className="text-[11px] whitespace-pre-line opacity-95">{testResult.message}</p>
-                  </div>
-                )}
-
-                <div className="pt-1 flex justify-between items-center">
-                  <button
-                    type="submit"
-                    disabled={isTesting}
-                    className="px-4 py-2 text-xs font-bold uppercase rounded-lg bg-amber-400 text-slate-950 hover:bg-amber-300 cursor-pointer flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                  >
-                    {isTesting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                    <span>Save & Connect</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowConfigDrawer(false)}
-                    className="text-xs text-slate-400 hover:text-white px-2 py-1 cursor-pointer"
-                  >
-                    Close
-                  </button>
-                </div>
-              </form>
-            )}
-
-            <div className="p-4 rounded-xl bg-blue-950/40 border border-blue-800/60 text-xs text-slate-300 space-y-1">
-              <div className="font-semibold text-white">Principal Office & Helpline:</div>
-              <div className="font-mono text-amber-400 font-bold">03401212046</div>
-              <div className="text-slate-400">Shahid Javed · Brain Science School, Zafarwal, Punjab</div>
+            {/* Database Reference Toggle */}
+            <div className="pt-1 flex items-center justify-between text-xs text-slate-500">
+              <span className="text-[11px]">Database Schema & Policies Reference:</span>
+              <button
+                type="button"
+                onClick={() => setShowPromptDrawer(!showPromptDrawer)}
+                className="text-xs text-amber-400 hover:text-white underline cursor-pointer flex items-center gap-1"
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>{showPromptDrawer ? 'Hide SQL Reference' : 'View SQL & Prompt'}</span>
+              </button>
             </div>
           </div>
 
@@ -663,14 +474,13 @@ export const AdmissionSection: React.FC = () => {
                       {submissionError}
                     </p>
                     <div className="pt-1.5 flex items-center justify-between text-[11px] border-t border-red-900/60">
-                      <span className="text-red-300">Your inputs were preserved. Check credentials or RLS policies.</span>
-                      <button
-                        type="button"
-                        onClick={() => setShowConfigDrawer(true)}
-                        className="underline font-semibold hover:text-white cursor-pointer ml-2"
+                      <span className="text-red-300">Your inputs were preserved. Please retry or contact the school office.</span>
+                      <a
+                        href="tel:03401212046"
+                        className="underline font-semibold text-amber-400 hover:text-white cursor-pointer ml-2"
                       >
-                        Open Supabase Settings
-                      </button>
+                        Call 0340-1212046
+                      </a>
                     </div>
                   </div>
                 )}

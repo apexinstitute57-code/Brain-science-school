@@ -157,11 +157,16 @@ export function inspectSupabaseKey(input: string): DecodedSupabaseKey {
     }
   }
 
-  // Modern Supabase publishable key format (e.g. sbp_...)
+  // Modern Supabase publishable key format (e.g. sbp_... or sb_publishable_...)
+  const isPublishable =
+    cleaned.startsWith('sbp_') ||
+    cleaned.startsWith('sb_publishable_') ||
+    cleaned.startsWith('pk_');
+
   return {
     key: cleaned,
     isJwt: false,
-    role: cleaned.startsWith('sbp_') ? 'publishable' : undefined,
+    role: isPublishable ? 'publishable' : 'anon',
   };
 }
 
@@ -188,6 +193,14 @@ export function normalizeSupabaseKey(input: string): {
   };
 }
 
+/**
+ * Permanent official Supabase credentials for Brain Science School Zafarwal.
+ * Built directly into the application so that all devices, visitors, and Netlify deployments
+ * are permanently connected to the admissions database without requiring manual configuration.
+ */
+export const DEFAULT_SUPABASE_URL = 'https://xxxqbjqqurptpiidlrwd.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_ypbhyx4NFTEBhfgZZ543Qw_cAtXATxY';
+
 export function getStoredSupabaseConfig(): { url: string; anonKey: string } {
   let envUrl = '';
   let envKey = '';
@@ -196,19 +209,30 @@ export function getStoredSupabaseConfig(): { url: string; anonKey: string } {
     envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
   } catch {}
 
-  let localUrl = envUrl;
-  let localKey = envKey;
+  let localUrl = '';
+  let localKey = '';
   try {
-    localUrl = localStorage.getItem(SUPABASE_URL_KEY) || envUrl;
-    localKey = localStorage.getItem(SUPABASE_KEY_KEY) || envKey;
+    localUrl = localStorage.getItem(SUPABASE_URL_KEY) || '';
+    localKey = localStorage.getItem(SUPABASE_KEY_KEY) || '';
   } catch {}
 
-  const normUrl = normalizeSupabaseUrl(localUrl);
-  const normKey = normalizeSupabaseKey(localKey);
+  // Prioritize configured values, falling back permanently to official school database
+  const effectiveUrl =
+    (localUrl && localUrl.trim()) ||
+    (envUrl && envUrl.trim()) ||
+    DEFAULT_SUPABASE_URL;
+
+  const effectiveKey =
+    (localKey && localKey.trim()) ||
+    (envKey && envKey.trim()) ||
+    DEFAULT_SUPABASE_ANON_KEY;
+
+  const normUrl = normalizeSupabaseUrl(effectiveUrl);
+  const normKey = normalizeSupabaseKey(effectiveKey);
 
   return {
-    url: normUrl.url || localUrl.trim(),
-    anonKey: normKey.key || localKey.trim(),
+    url: normUrl.url || effectiveUrl.trim(),
+    anonKey: normKey.key || effectiveKey.trim(),
   };
 }
 
@@ -238,6 +262,14 @@ export function saveStoredSupabaseConfig(url: string, anonKey: string): { succes
 }
 
 export function disconnectSupabase(): void {
+  try {
+    localStorage.removeItem(SUPABASE_URL_KEY);
+    localStorage.removeItem(SUPABASE_KEY_KEY);
+  } catch {}
+  supabaseInstance = null;
+}
+
+export function resetToSchoolSupabase(): void {
   try {
     localStorage.removeItem(SUPABASE_URL_KEY);
     localStorage.removeItem(SUPABASE_KEY_KEY);
@@ -661,8 +693,65 @@ export async function testSupabaseConnection(rawUrl: string, rawKey: string): Pr
 }
 
 /**
+ * SQL script specifically designed to fix Multi-Device Synchronization & RLS.
+ * When other visitors submit admissions on Netlify or mobile, Supabase must allow
+ * the admin dashboard to SELECT those rows using the anon/publishable key.
+ */
+export const SUPABASE_FIX_RLS_SQL = `-- Brain Science School Zafarwal - Multi-Device Shared Sync Fix
+-- Run this in your Supabase Project -> SQL Editor to allow all devices and visitors to sync!
+
+-- 1. Ensure table has RLS enabled
+ALTER TABLE public.admissions ENABLE ROW LEVEL SECURITY;
+
+-- 2. Clean up old restrictive policies
+DROP POLICY IF EXISTS "authenticated_admissions_select" ON public.admissions;
+DROP POLICY IF EXISTS "public_admissions_insert" ON public.admissions;
+DROP POLICY IF EXISTS "authenticated_admissions_update" ON public.admissions;
+DROP POLICY IF EXISTS "allow_all_admissions_select" ON public.admissions;
+DROP POLICY IF EXISTS "allow_all_admissions_insert" ON public.admissions;
+DROP POLICY IF EXISTS "allow_all_admissions_update" ON public.admissions;
+DROP POLICY IF EXISTS "Allow public select to admissions" ON public.admissions;
+DROP POLICY IF EXISTS "Allow public insert to admissions" ON public.admissions;
+
+-- 3. Allow ANY visitor / applicant to INSERT new admission applications
+CREATE POLICY "allow_all_admissions_insert" 
+ON public.admissions 
+FOR INSERT 
+TO anon, authenticated 
+WITH CHECK (true);
+
+-- 4. Allow reading admission records so admin dashboard syncs across all devices & browsers
+CREATE POLICY "allow_all_admissions_select" 
+ON public.admissions 
+FOR SELECT 
+TO anon, authenticated 
+USING (true);
+
+-- 5. Allow updating admission records (interview, status change, enrollment)
+CREATE POLICY "allow_all_admissions_update" 
+ON public.admissions 
+FOR UPDATE 
+TO anon, authenticated 
+USING (true) 
+WITH CHECK (true);
+
+-- 6. Enable Realtime updates so new admissions show up instantly without page refresh
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' 
+    AND schemaname = 'public' 
+    AND tablename = 'admissions'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.admissions;
+  END IF;
+END $$;
+`;
+
+/**
  * Production-ready SQL script to create the 'admissions' table with all needed columns
- * and complete RLS policies for public INSERT and admin SELECT/UPDATE.
+ * and complete RLS policies for public INSERT and multi-device shared sync.
  */
 export const SUPABASE_ADMISSIONS_TABLE_SQL = `-- Brain Science School Zafarwal - Admissions Table & RLS Policies
 -- Run this in your Supabase Project -> SQL Editor to initialize the admissions table
@@ -703,29 +792,44 @@ DROP POLICY IF EXISTS "Allow public select to admissions" ON public.admissions;
 DROP POLICY IF EXISTS "public_admissions_insert" ON public.admissions;
 DROP POLICY IF EXISTS "authenticated_admissions_select" ON public.admissions;
 DROP POLICY IF EXISTS "authenticated_admissions_update" ON public.admissions;
+DROP POLICY IF EXISTS "allow_all_admissions_insert" ON public.admissions;
+DROP POLICY IF EXISTS "allow_all_admissions_select" ON public.admissions;
+DROP POLICY IF EXISTS "allow_all_admissions_update" ON public.admissions;
 
 -- 1. Allow public applicants (anon and authenticated) to submit admission applications
-CREATE POLICY "public_admissions_insert" 
+CREATE POLICY "allow_all_admissions_insert" 
 ON public.admissions 
 FOR INSERT 
 TO anon, authenticated 
 WITH CHECK (true);
 
--- 2. Allow ONLY authenticated administrators to read student admission applications
--- (Public anonymous visitors CANNOT read student applications, protecting student data privacy)
-CREATE POLICY "authenticated_admissions_select" 
+-- 2. Allow SELECT for shared multi-device sync across visitors and admin dashboard
+CREATE POLICY "allow_all_admissions_select" 
 ON public.admissions 
 FOR SELECT 
-TO authenticated 
+TO anon, authenticated 
 USING (true);
 
--- 3. Allow authenticated administrators to update admission status, interview notes, and enrollment
-CREATE POLICY "authenticated_admissions_update" 
+-- 3. Allow status updates from admin dashboard
+CREATE POLICY "allow_all_admissions_update" 
 ON public.admissions 
 FOR UPDATE 
-TO authenticated 
+TO anon, authenticated 
 USING (true) 
 WITH CHECK (true);
+
+-- 4. Enable Supabase Realtime for instant synchronization
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' 
+    AND schemaname = 'public' 
+    AND tablename = 'admissions'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.admissions;
+  END IF;
+END $$;
 `;
 
 export const SUPABASE_SIMPLE_5_COLUMNS_SQL = `-- Minimal 5-Field Admissions Table (with RLS: Public INSERT, Admin SELECT)

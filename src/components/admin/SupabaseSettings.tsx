@@ -3,12 +3,16 @@ import {
   getStoredSupabaseConfig,
   saveStoredSupabaseConfig,
   disconnectSupabase,
+  resetToSchoolSupabase,
+  DEFAULT_SUPABASE_URL,
+  DEFAULT_SUPABASE_ANON_KEY,
   testSupabaseConnection,
   normalizeSupabaseUrl,
   normalizeSupabaseKey,
   inspectSupabaseKey,
   ConnectionTestResult,
   SUPABASE_ADMISSIONS_TABLE_SQL,
+  SUPABASE_FIX_RLS_SQL,
   SUPABASE_AI_PROMPT,
   SUPABASE_SQL_SCHEMA,
 } from '../../services/supabase';
@@ -30,6 +34,7 @@ import {
   Sparkles,
   HelpCircle,
   Info,
+  Radio,
 } from 'lucide-react';
 
 export const SupabaseSettings: React.FC = () => {
@@ -42,6 +47,7 @@ export const SupabaseSettings: React.FC = () => {
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedFixSql, setCopiedFixSql] = useState(false);
   const [copiedSchema, setCopiedSchema] = useState(false);
   const [isSaved, setIsSaved] = useState(Boolean(currentConfig.url && currentConfig.anonKey));
 
@@ -103,6 +109,18 @@ export const SupabaseSettings: React.FC = () => {
     setTesting(false);
   };
 
+  const handleResetToOfficial = async () => {
+    resetToSchoolSupabase();
+    setUrl(DEFAULT_SUPABASE_URL);
+    setAnonKey(DEFAULT_SUPABASE_ANON_KEY);
+    saveStoredSupabaseConfig(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY);
+    setIsSaved(true);
+    setTesting(true);
+    const res = await testSupabaseConnection(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY);
+    setTestResult(res);
+    setTesting(false);
+  };
+
   const handleDisconnect = () => {
     if (window.confirm('Are you sure you want to disconnect Supabase? Applications will be saved to local storage until reconnected.')) {
       disconnectSupabase();
@@ -130,20 +148,32 @@ export const SupabaseSettings: React.FC = () => {
           </div>
           <h2 className="text-xl font-bold text-white">Supabase PostgreSQL & Admissions Sync</h2>
           <p className="text-xs text-slate-400 max-w-2xl mt-1">
-            Connect Brain Science School Zafarwal directly to your Supabase project. Admission inquiries submitted on the public website save automatically to the <code className="text-amber-300 bg-slate-900 px-1 py-0.5 rounded">admissions</code> table.
+            Brain Science School Zafarwal database (<code className="text-amber-300 bg-slate-900 px-1 py-0.5 rounded">xxxqbjqqurptpiidlrwd</code>). Admission inquiries submitted on the public website save automatically to the <code className="text-amber-300 bg-slate-900 px-1 py-0.5 rounded">admissions</code> table across all devices.
           </p>
         </div>
 
-        {isSaved && (
+        <div className="flex items-center gap-2 self-start sm:self-auto">
           <button
             type="button"
-            onClick={handleDisconnect}
-            className="self-start sm:self-auto px-3.5 py-2 text-xs font-semibold rounded-lg bg-red-950/60 hover:bg-red-900 text-red-300 border border-red-800 flex items-center gap-1.5 cursor-pointer transition-colors"
+            onClick={handleResetToOfficial}
+            className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-blue-950/80 hover:bg-blue-900 text-blue-300 border border-blue-800 flex items-center gap-1.5 cursor-pointer transition-colors"
+            title="Restore official school Supabase credentials"
           >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Disconnect Supabase</span>
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Restore School Supabase</span>
           </button>
-        )}
+
+          {isSaved && (
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-red-950/60 hover:bg-red-900 text-red-300 border border-red-800 flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Disconnect</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Connection Panel */}
@@ -396,6 +426,38 @@ export const SupabaseSettings: React.FC = () => {
 
         <div className="bg-slate-950 rounded-xl border border-slate-800 p-4 font-mono text-[11px] text-amber-300 leading-relaxed max-h-56 overflow-y-auto whitespace-pre-wrap">
           {SUPABASE_AI_PROMPT}
+        </div>
+      </div>
+
+      {/* Multi-Device Shared Sync & RLS Fix Card */}
+      <div className="bg-slate-900 border-2 border-amber-500/70 rounded-2xl p-6 sm:p-8 space-y-4 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-700/80 text-[11px] font-mono mb-2">
+              <Radio className="w-3 h-3 text-amber-400 animate-pulse" />
+              <span>Fix Live Data Synchronization</span>
+            </div>
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <span>Fix Multi-Device Sync: Allow Visitors and Admin to Share Submissions</span>
+            </h3>
+            <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+              If submissions from other visitors on Netlify or other phones are not appearing in your admin dashboard, run this 1-step SQL fix. It configures Supabase Row Level Security (RLS) to allow both public visitors to <code className="text-amber-300 font-bold">INSERT</code> and the dashboard to <code className="text-amber-300 font-bold">SELECT</code> all records.
+            </p>
+          </div>
+
+          <button
+            onClick={() => handleCopy(SUPABASE_FIX_RLS_SQL, setCopiedFixSql)}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg cursor-pointer transition-colors shrink-0 shadow-lg"
+          >
+            {copiedFixSql ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            <span>{copiedFixSql ? 'SQL Copied!' : 'Copy Multi-Device Sync SQL'}</span>
+          </button>
+        </div>
+
+        <div className="bg-slate-950 rounded-xl border border-slate-800 p-4 max-h-56 overflow-y-auto">
+          <pre className="font-mono text-[11px] text-amber-300/90 leading-relaxed whitespace-pre">
+            {SUPABASE_FIX_RLS_SQL}
+          </pre>
         </div>
       </div>
 
